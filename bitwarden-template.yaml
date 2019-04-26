@@ -1,0 +1,737 @@
+apiVersion: v1
+kind: Template
+metadata:
+  name: bitwarden-template
+  annotations:
+    iconClass: fa fa-key
+    description: "Template for deploying a fresh Bitwarden instance"
+    tags: "application,password-manager"
+    openshift.io/provider-display-name: Catalysts
+    openshift.io/display-name: Bitwarden Password Manager
+    openshift.io/long-description: This template provides a full Bitwarden instance using MSSQL as datastore.
+objects:
+#                                                 Config Maps
+#
+- apiVersion: v1
+  kind: Secret
+  metadata:
+    name: ${APP_NAME}-secret
+  type: Opaque 
+  stringData: 
+    SA_PASSWORD: ${MSSQL_PASSWD}
+    globalSettings__mail__smtp__username: ${SMTP_USER}
+    globalSettings__mail__smtp__password: ${SMTP_PASSWORD}
+    globalSettings__yubico__clientId: ${YUBICO_CLIENT}
+    globalSettings__yubico__key: ${YUBICO_KEY}
+    globalSettings__identityServer__certificatePassword: ${IDENTITY_PFX_PASS}
+    globalSettings__internalIdentityKey: ${INTERNAL_IDENTITY_KEY}
+    globalSettings__duo__aKey: ${DUO_AKEY}
+    globalSettings__sqlServer__connectionString: "Data Source=tcp:${APP_NAME}-mssql-service,1433;Initial Catalog=vault;Persist Security Info=False;User ID=sa;Password=${MSSQL_PASSWD};MultipleActiveResultSets=False;Connect Timeout=30;Encrypt=True;TrustServerCertificate=True"
+    adminSettings__admins: "${ADMINS}"
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: ${APP_NAME}-file-config
+  data:
+    app-id.json: |+
+      {
+          "trustedFacets": [
+              {
+              "version": {
+                  "major": 1,
+                  "minor": 0
+              },
+              "ids": [
+                  "${APP_NAME}.${DOMAIN}",
+                  "ios:bundle-id:com.8bit.bitwarden",
+                  "android:apk-key-hash:dUGFzUzf3lmHSLBDBIv+WaFyZMI"
+              ]
+              }
+          ]
+      }
+- apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: ${APP_NAME}-config
+  data:
+    APP_NAME: ${APP_NAME}
+    ACCEPT_EULA: 'Y'
+    MSSQL_PID: Express
+    ASPNETCORE_ENVIRONMENT: Production
+    globalSettings__selfHosted: "true"
+    globalSettings__baseServiceUri__vault: https://${APP_NAME}.${DOMAIN}
+    globalSettings__baseServiceUri__api: https://${APP_NAME}.${DOMAIN}/api
+    globalSettings__baseServiceUri__identity: https://${APP_NAME}.${DOMAIN}/identity
+    globalSettings__baseServiceUri__internalIdentity: http://${APP_NAME}-identity-service:5000/
+    globalSettings__baseServiceUri__admin: https://${APP_NAME}.${DOMAIN}/admin
+    globalSettings__baseServiceUri__notifications: https://${APP_NAME}.${DOMAIN}/notifications
+    globalSettings__attachment__baseDirectory: /etc/bitwarden/core/attachments
+    globalSettings__attachment__baseUrl: https://${APP_NAME}.${DOMAIN}/attachments
+    globalSettings__dataProtection__directory: /etc/bitwarden/core/aspnet-dataprotection
+    globalSettings__logDirectory: /etc/bitwarden/logs
+    globalSettings__licenseDirectory: /etc/bitwarden/core/licenses
+    globalSettings__installation__id: "${INST_ID}"
+    globalSettings__installation__key: "${INST_KEY}"
+    globalSettings__installation__identityUri: "https://${APP_NAME}.${DOMAIN}/identity"
+    globalSettings__mail__replyToEmail: no-reply@${APP_NAME}.${DOMAIN}
+    globalSettings__mail__smtp__host: ${SMTP_HOST}
+    globalSettings__mail__smtp__ssl: "${SMTP_SSL_VERIFY}"
+    globalSettings__mail__smtp__port: "${SMTP_PORT}"
+    globalSettings__mail__smtp__useDefaultCredentials: "false"
+    globalSettings__mail__smtp__authType: "${SMTP_AUTH_TYPE}"
+    globalSettings__disableUserRegistration: "false"
+    
+#                                                 Volume Claims
+#
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    volume.beta.kubernetes.io/storage-class: dynamic
+    name: ${APP_NAME}-mssql-volume
+  spec:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${MSSQL_STORAGE}
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    volume.beta.kubernetes.io/storage-class: dynamic
+    name: ${APP_NAME}-mssql-backups-volume
+  spec:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${MSSQL_BACKUPS_STORAGE}
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    volume.beta.kubernetes.io/storage-class: dynamic
+    name: ${APP_NAME}-attachment-volume
+  spec:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${ATTACHMENTS_STORAGE}
+#                                                 Deployment Configuration
+#
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    name: ${APP_NAME}-web
+  spec:
+    replicas: ${WEB_REPLICAS}
+    selector:
+      app: ${APP_NAME}-web
+    template:
+      metadata:
+        app: ${APP_NAME}-web
+        deploymentconfig: ${APP_NAME}-web
+        labels:
+          app: ${APP_NAME}-web
+      spec:
+        containers:
+        - image: ${IMG_BASE}web
+          imagePullPolicy: Always
+          name: ${APP_NAME}-web
+          ports:
+          - containerPort: 5000
+            protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ${APP_NAME}-config
+            - secretRef:
+                name: ${APP_NAME}-secret
+          resources:
+            limits:
+              cpu: ${CONTAINER_CPU}
+              memory: 250Mi
+          volumeMounts:
+          - name: config-volume
+            mountPath: /etc/bitwarden/web/
+        volumes:
+        - name: config-volume
+          configMap:
+            name: ${APP_NAME}-file-config
+    strategy:
+      type: Rolling
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    name: ${APP_NAME}-mssql
+  spec:
+    replicas: 1
+    selector:
+      app: ${APP_NAME}-mssql
+    template:
+      metadata:
+        app: ${APP_NAME}-mssql
+        deploymentconfig: ${APP_NAME}-mssql
+        labels:
+          app: ${APP_NAME}-mssql
+      spec:
+        containers:
+        - image: ${IMG_BASE}mssql
+          imagePullPolicy: Always
+          name: ${APP_NAME}-mssql
+          ports:
+          - containerPort: 1433
+            protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ${APP_NAME}-config
+            - secretRef:
+                name: ${APP_NAME}-secret
+          volumeMounts:
+          - name: storage-volume
+            mountPath: /var/opt/mssql/data/
+          - name: backups-volume
+            mountPath: /backups
+        - image: busybox
+          imagePullPolicy: Always
+          name: ${APP_NAME}-mssql-backup-server
+          command: ["httpd", "-f", "-h","/backups","-p","8080"]
+          ports:
+          - containerPort: 8080
+            protocol: TCP
+          volumeMounts:
+          - name: backups-volume
+            mountPath: /backups
+        volumes:
+        - name: storage-volume
+          persistentVolumeClaim:
+            claimName: ${APP_NAME}-mssql-volume
+        - name: backups-volume
+          persistentVolumeClaim:
+            claimName: ${APP_NAME}-mssql-backups-volume
+    strategy:
+      type: Recreate
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    name: ${APP_NAME}-api
+  spec:
+    replicas: 1
+    selector:
+      app: ${APP_NAME}-api
+    template:
+      metadata:
+        app: ${APP_NAME}-api
+        deploymentconfig: ${APP_NAME}-api
+        labels:
+          app: ${APP_NAME}-api
+      spec:
+        volumes:
+        - name: attachments-shared
+          persistentVolumeClaim:
+            claimName: ${APP_NAME}-attachment-volume
+        containers:
+        - image: ${IMG_BASE}api
+          imagePullPolicy: Always
+          name: ${APP_NAME}-api
+          volumeMounts:
+          - name: attachments-shared
+            mountPath: /etc/bitwarden/core/attachments
+          ports:
+          - containerPort: 5000
+            protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ${APP_NAME}-config
+            - secretRef:
+                name: ${APP_NAME}-secret
+          resources:
+            limits:
+              cpu: ${CONTAINER_CPU}
+              memory: 250Mi
+        - image: ${IMG_BASE}attachments
+          imagePullPolicy: Always
+          name: ${APP_NAME}-attachments
+          volumeMounts:
+          - name: attachments-shared
+            mountPath: /etc/bitwarden/core/attachments
+          ports:
+          - containerPort: 5001
+            protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ${APP_NAME}-config
+            - secretRef:
+                name: ${APP_NAME}-secret
+          env:
+          - name: ASPNETCORE_URLS
+            value: 'http://+:5001'
+          resources:
+            limits:
+              cpu: ${CONTAINER_CPU}
+              memory: 250Mi
+    strategy:
+      type: Recreate
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    name: ${APP_NAME}-identity
+  spec:
+    replicas: 1
+    selector:
+      app: ${APP_NAME}-identity
+    template:
+      metadata:
+        app: ${APP_NAME}-identity
+        deploymentconfig: ${APP_NAME}-identity
+        labels:
+          app: ${APP_NAME}-identity
+      spec:
+        containers:
+        - image: ${IMG_BASE}identity
+          imagePullPolicy: Always
+          name: ${APP_NAME}-identity
+          ports:
+          - containerPort: 5000
+            protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ${APP_NAME}-config
+            - secretRef:
+                name: ${APP_NAME}-secret
+          resources:
+            limits:
+              cpu: ${CONTAINER_CPU}
+              memory: 250Mi
+          volumeMounts:
+          - name: config-volume
+            mountPath: /mnt/
+        volumes:
+        - name: config-volume
+          configMap:
+            name: ${APP_NAME}-file-config
+    strategy:
+      type: Rolling
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    name: ${APP_NAME}-notifications
+  spec:
+    replicas: 1
+    selector:
+      app: ${APP_NAME}-notifications
+    template:
+      metadata:
+        app: ${APP_NAME}-notifications
+        deploymentconfig: ${APP_NAME}-notifications
+        labels:
+          app: ${APP_NAME}-notifications
+      spec:
+        containers:
+        - image: ${IMG_BASE}notifications
+          imagePullPolicy: Always
+          name: ${APP_NAME}-notifications
+          ports:
+          - containerPort: 5000
+            protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ${APP_NAME}-config
+            - secretRef:
+                name: ${APP_NAME}-secret
+          resources:
+            limits:
+              cpu: ${CONTAINER_CPU}
+              memory: 250Mi
+    strategy:
+      type: Rolling
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    name: ${APP_NAME}-icons
+  spec:
+    replicas: 1
+    selector:
+      app: ${APP_NAME}-icons
+    template:
+      metadata:
+        app: ${APP_NAME}-icons
+        deploymentconfig: ${APP_NAME}-icons
+        labels:
+          app: ${APP_NAME}-icons
+      spec:
+        containers:
+        - image: ${IMG_BASE}icons
+          imagePullPolicy: Always
+          name: ${APP_NAME}-icons
+          ports:
+          - containerPort: 5000
+            protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ${APP_NAME}-config
+            - secretRef:
+                name: ${APP_NAME}-secret
+          resources:
+            limits:
+              cpu: ${CONTAINER_CPU}
+              memory: 250Mi
+    strategy:
+      type: Rolling
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    name: ${APP_NAME}-admin
+  spec:
+    replicas: 1
+    selector:
+      app: ${APP_NAME}-admin
+    template:
+      metadata:
+        app: ${APP_NAME}-admin
+        deploymentconfig: ${APP_NAME}-admin
+        labels:
+          app: ${APP_NAME}-admin
+      spec:
+        containers:
+        - image: ${IMG_BASE}admin
+          imagePullPolicy: Always
+          name: ${APP_NAME}-admin
+          ports:
+          - containerPort: 5000
+            protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: ${APP_NAME}-config
+            - secretRef:
+                name: ${APP_NAME}-secret
+          resources:
+            limits:
+              cpu: ${CONTAINER_CPU}
+              memory: 250Mi
+    strategy:
+      type: Rolling
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    name: ${APP_NAME}-nginx
+  spec:
+    replicas: 1
+    selector:
+      app: ${APP_NAME}-nginx
+    template:
+      metadata:
+        app: ${APP_NAME}-nginx
+        deploymentconfig: ${APP_NAME}-nginx
+        labels:
+          app: ${APP_NAME}-nginx
+      spec:
+        containers:
+        - image: ${IMG_BASE}nginx
+          imagePullPolicy: Always
+          name: ${APP_NAME}-nginx
+          ports:
+          - containerPort: 5000
+            protocol: TCP
+          env:
+          - name: PUB_ADDR
+            value: ${APP_NAME}.${DOMAIN}
+          envFrom:
+            - configMapRef:
+                name: ${APP_NAME}-config
+            - secretRef:
+                name: ${APP_NAME}-secret
+          resources:
+            limits:
+              cpu: ${CONTAINER_CPU}
+              memory: 250Mi
+    strategy:
+      type: Rolling
+
+#                                                 Services
+#
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}-nginx-service
+  spec:
+    ports:
+      - name: 8080-tcp
+        port: 8080
+        protocol: TCP
+        targetPort: 8080
+    selector:
+      deploymentconfig: ${APP_NAME}-nginx
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}-mssql-service
+  spec:
+    ports:
+      - name: 1433-tcp
+        port: 1433
+        protocol: TCP
+        targetPort: 1433
+    selector:
+      deploymentconfig: ${APP_NAME}-mssql
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}-mssql-backup-service
+  spec:
+    ports:
+      - name: 8080-tcp
+        port: 8080
+        protocol: TCP
+        targetPort: 8080
+    selector:
+      deploymentconfig: ${APP_NAME}-mssql
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}-web-service
+  spec:
+    ports:
+      - name: 5000-tcp
+        port: 5000
+        protocol: TCP
+        targetPort: 5000
+    selector:
+      deploymentconfig: ${APP_NAME}-web
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}-api-service
+  spec:
+    ports:
+      - name: 5000-tcp
+        port: 5000
+        protocol: TCP
+        targetPort: 5000
+    selector:
+      deploymentconfig: ${APP_NAME}-api
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}-icons-service
+  spec:
+    ports:
+      - name: 5000-tcp
+        port: 5000
+        protocol: TCP
+        targetPort: 5000
+    selector:
+      deploymentconfig: ${APP_NAME}-icons
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}-notifications-service
+  spec:
+    ports:
+      - name: 5000-tcp
+        port: 5000
+        protocol: TCP
+        targetPort: 5000
+    selector:
+      deploymentconfig: ${APP_NAME}-notifications
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}-identity-service
+  spec:
+    ports:
+      - name: 5000-tcp
+        port: 5000
+        protocol: TCP
+        targetPort: 5000
+    selector:
+      deploymentconfig: ${APP_NAME}-identity
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}-attachments-service
+  spec:
+    ports:
+      - name: 5001-tcp
+        port: 5001
+        protocol: TCP
+        targetPort: 5001
+    selector:
+      deploymentconfig: ${APP_NAME}-api
+    type: ClusterIP
+- apiVersion: v1
+  kind: Service
+  metadata:
+    name: ${APP_NAME}-admin-service
+  spec:
+    ports:
+      - name: 5000-tcp
+        port: 5000
+        protocol: TCP
+        targetPort: 5000
+    selector:
+      deploymentconfig: ${APP_NAME}-admin
+    type: ClusterIP
+
+#                                                 Routes
+#
+
+- apiVersion: v1
+  kind: Route
+  metadata:
+    name: ${APP_NAME}-nginx-route
+  spec:
+    host: ${APP_NAME}.${DOMAIN}
+    tls:
+      termination: edge
+      insecureEdgeTerminationPolicy: Redirect
+    port:
+      targetPort: 8080-tcp
+    to:
+      kind: Service
+      name: ${APP_NAME}-nginx-service
+      weight: 100
+
+#                                                 Jobs
+#
+- apiVersion: batch/v1
+  kind: Job
+  metadata:
+    name: ${APP_NAME}-mssql-setup
+  spec:
+    parallelism: 1
+    completions: 1
+    template:
+      metadata:
+        app: ${APP_NAME}
+        name: ${APP_NAME}-mssql-setup
+      spec:
+        containers:
+        - name: ${APP_NAME}-mssql-setup
+          image: ${IMG_BASE}setup
+          command: ["/entrypoint.sh", "dotnet",  "Setup.dll", "-update", "1", "-db", "1", "-os", "lin", "-corev", "1.24.0", "-webv", "latest"]
+          envFrom:
+            - configMapRef:
+                name: ${APP_NAME}-config
+            - secretRef:
+                name: ${APP_NAME}-secret
+        restartPolicy: OnFailure
+- apiVersion: batch/v2alpha1
+  kind: CronJob
+  metadata:
+    name: ${APP_NAME}-backup
+  spec:
+    parallelism: 1
+    completions: 1
+    schedule: ${BACKUP_SCHEDULE}
+    jobTemplate:         
+      spec:
+        template:
+          metadata:
+            app: ${APP_NAME}
+            name: ${APP_NAME}-backup
+          spec:
+            containers:
+            - name: ${APP_NAME}-backup
+              image: ${IMG_BASE}mssql
+              command: ["/opt/mssql-tools/bin/uid_entrypoint","/backup-db.sh"]
+              env:
+                - name: MSSQL_HOST
+                  value: ${APP_NAME}-mssql-service
+              envFrom:
+                - configMapRef:
+                    name: ${APP_NAME}-config
+                - secretRef:
+                    name: ${APP_NAME}-secret
+            restartPolicy: OnFailure
+
+parameters:
+- displayName: Application Name
+  name: APP_NAME
+  required: true
+- displayName: Domain
+  name: DOMAIN
+  required: true
+  value: example.org
+- displayName: Installation ID
+  name: INST_ID
+  required: true
+- displayName: Installation Key
+  name: INST_KEY
+  required: true
+- displayName: Web Replicas
+  from: '[0-9]+'
+  name: WEB_REPLICAS
+  value: '1'
+- displayName: Container CPU
+  name: CONTAINER_CPU
+  value: '500m'
+- displayName: MSSQL Password
+  description: 'Note: this needs to comply with the mssql password policy https://docs.microsoft.com/en-us/sql/relational-databases/security/password-policy'
+  name: MSSQL_PASSWD
+  generate: expression
+  from: "[a-zA-Z0-9]{12}"
+- displayName: MSSQL storage volume size
+  name: MSSQL_STORAGE
+  required: true
+  value: "1Gi"
+- displayName: MSSQL backups storage volume size
+  name: MSSQL_BACKUPS_STORAGE
+  required: true
+  value: "1Gi"
+- displayName: Attachments volume size
+  name: ATTACHMENTS_STORAGE
+  required: true
+  value: "1Gi"
+- displayName: Image Base path
+  name: IMG_BASE
+  required: true
+  value: 10.127.46.76:5000/bitwarden-demo/bitwarden-
+- displayName: PFX password to use
+  name: IDENTITY_PFX_PASS
+  required: true
+  from: "[a-zA-Z0-9]{32}"
+  generate: expression
+- displayName: Internal Identity key
+  name: INTERNAL_IDENTITY_KEY
+  required: true
+  from: "[a-zA-Z0-9]{64}"
+  generate: expression
+- displayName: Backup Schedule
+  name: BACKUP_SCHEDULE
+  value: "*/10 * * * *"
+- displayName: Duo Key
+  name: DUO_AKEY
+  required: true
+  from: "[a-zA-Z0-9]{64}"
+  generate: expression
+- displayName: Admins
+  description: Comma seperated list of admin accounts (to use the admin interface, an smtp server must be configured)
+  name: ADMINS
+- displayName: SMTP Host
+  name: SMTP_HOST 
+- displayName: SMTP User
+  name: SMTP_USER
+- displayName: SMTP Password
+  name: SMTP_PASSWORD
+- displayName: SMTP Port
+  name: SMTP_PORT
+  value: 25
+- displayName: SMTP SSL
+  name: SMTP_SSL_VERIFY
+  description: 'Please only use "true" or "false" (without quotes and lowercase)'
+  value: "true"
+- displayName: SMTP Auth Type
+  name: SMTP_AUTH_TYPE
+  description: 'For Exchange use LOGIN, otherwise keep empty'
+  value: "LOGIN"
+- displayName: Yubico Client ID
+  name: YUBICO_CLIENT
+- displayName: Yubico Key
+  name: YUBICO_KEY
