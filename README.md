@@ -13,6 +13,12 @@ make docker
 After that, create the template by running
 
 ``` bash
-oc create -f bitwarden-template.yaml
+oc create -f bitwarden.yaml
 ```
 
+To use the template, you can run:
+
+``` bash
+oc process bitwarden -p APP_NAME="subdomain" -p INST_ID="" -p INST_KEY="" -p DOMAIN="example.org" |oc create -f -
+```
+Where `APP_NAME` is a subdomain, `DOMAIN` is the domain, and INST_ID and INST_KEY are taken from [the Bitwarden host page](https://bitwarden.com/host/)
