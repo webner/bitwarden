@@ -1,4 +1,4 @@
-ARG CORE_VERSION=1.24.0
+ARG CORE_VERSION=1.39.4
 FROM bitwarden/identity:$CORE_VERSION
 
 RUN mkdir -p /etc/bitwarden/core && \

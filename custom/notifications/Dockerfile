@@ -1,4 +1,4 @@
-ARG CORE_VERSION=1.24.0
+ARG CORE_VERSION=1.39.4
 FROM bitwarden/notifications:$CORE_VERSION
 
 

@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Template
 metadata:
-  name: bitwarden-template
+  name: bitwarden
   annotations:
     iconClass: fa fa-key
     description: "Template for deploying a fresh Bitwarden instance"
@@ -123,12 +123,12 @@ objects:
   metadata:
     name: ${APP_NAME}-web
   spec:
-    replicas: ${WEB_REPLICAS}
     selector:
       app: ${APP_NAME}-web
     template:
       metadata:
         app: ${APP_NAME}-web
+        replicas: 1
         deploymentconfig: ${APP_NAME}-web
         labels:
           app: ${APP_NAME}-web
@@ -622,34 +622,6 @@ objects:
             - secretRef:
                 name: ${APP_NAME}-secret
         restartPolicy: OnFailure
-- apiVersion: batch/v2alpha1
-  kind: CronJob
-  metadata:
-    name: ${APP_NAME}-backup
-  spec:
-    parallelism: 1
-    completions: 1
-    schedule: ${BACKUP_SCHEDULE}
-    jobTemplate:         
-      spec:
-        template:
-          metadata:
-            app: ${APP_NAME}
-            name: ${APP_NAME}-backup
-          spec:
-            containers:
-            - name: ${APP_NAME}-backup
-              image: ${IMG_BASE}mssql
-              command: ["/opt/mssql-tools/bin/uid_entrypoint","/backup-db.sh"]
-              env:
-                - name: MSSQL_HOST
-                  value: ${APP_NAME}-mssql-service
-              envFrom:
-                - configMapRef:
-                    name: ${APP_NAME}-config
-                - secretRef:
-                    name: ${APP_NAME}-secret
-            restartPolicy: OnFailure
 
 parameters:
 - displayName: Application Name
@@ -665,10 +637,6 @@ parameters:
 - displayName: Installation Key
   name: INST_KEY
   required: true
-- displayName: Web Replicas
-  from: '[0-9]+'
-  name: WEB_REPLICAS
-  value: '1'
 - displayName: Container CPU
   name: CONTAINER_CPU
   value: '500m'
@@ -703,16 +671,13 @@ parameters:
   required: true
   from: "[a-zA-Z0-9]{64}"
   generate: expression
-- displayName: Backup Schedule
-  name: BACKUP_SCHEDULE
-  value: "*/10 * * * *"
 - displayName: Duo Key
   name: DUO_AKEY
   required: true
   from: "[a-zA-Z0-9]{64}"
   generate: expression
 - displayName: Admins
-  description: Comma seperated list of admin accounts (to use the admin interface, an smtp server must be configured)
+  description: "Comma seperated list of admin accounts (to use the admin interface, an smtp server must be configured)"
   name: ADMINS
 - displayName: SMTP Host
   name: SMTP_HOST 
@@ -722,7 +687,7 @@ parameters:
   name: SMTP_PASSWORD
 - displayName: SMTP Port
   name: SMTP_PORT
-  value: 25
+  value: "25"
 - displayName: SMTP SSL
   name: SMTP_SSL_VERIFY
   description: 'Please only use "true" or "false" (without quotes and lowercase)'

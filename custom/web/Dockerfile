@@ -1,4 +1,4 @@
-ARG WEB_VERSION=2.3.0
+ARG WEB_VERSION=2.18.1
 FROM bitwarden/web:$WEB_VERSION
 
 RUN mkdir /etc/bitwarden && \
